@@ -47,8 +47,10 @@ function StatCard({
   return (
     <div className="glass rounded-3xl p-6 text-center">
       <div className="text-3xl">{emoji}</div>
-      <p className="mt-2 text-3xl font-black text-slate-900 dark:text-white">{animated}</p>
-      <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-900 dark:text-slate-400">
+      <p className="mt-2 text-3xl font-black dark:text-white" style={{ color: '#0f172a' }}>
+        {animated}
+      </p>
+      <p className="mt-1 text-xs font-black uppercase tracking-widest dark:text-slate-400" style={{ color: '#1e293b' }}>
         {label}
       </p>
     </div>
