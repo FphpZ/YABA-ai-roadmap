@@ -1,0 +1,8 @@
+{
+  "remote.portsAttributes": {
+    "3000": {
+      "label": "AI Roadmap",
+      "onAutoForward": "openPreview"
+    }
+  }
+}
