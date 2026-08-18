@@ -12,6 +12,11 @@ create table if not exists public.profiles (
   goal text,
   xp integer not null default 0,
   level integer not null default 0,
+  -- Progression lue/ecrite par src/lib/supabase/progress.ts
+  completed_missions text[] not null default '{}',
+  unlocked_worlds text[] not null default array['foundations'],
+  streak integer not null default 0,
+  last_visit date,
   created_at timestamptz not null default now()
 );
 
@@ -167,6 +172,39 @@ create table if not exists public.user_badges (
 );
 
 -- =====================================================
+-- AVIS UTILISATEURS
+-- =====================================================
+-- ReviewForm / LiveStats inserent { author, rating, comment } sans user_id :
+-- user_id est rempli par defaut avec auth.uid(), ce qui permet d'attribuer
+-- l'avis et de le controler en RLS sans modifier le code client.
+
+create table if not exists public.reviews (
+  id uuid primary key default uuid_generate_v4(),
+  user_id uuid not null default auth.uid()
+    references auth.users(id) on delete cascade,
+  author text not null,
+  rating integer not null check (rating between 1 and 5),
+  comment text not null check (char_length(comment) between 1 and 1000),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists reviews_created_at_idx
+  on public.reviews (created_at desc);
+
+-- =====================================================
+-- STATISTIQUES DU SITE (ligne unique id = 1)
+-- =====================================================
+
+create table if not exists public.site_stats (
+  id integer primary key default 1 check (id = 1),
+  visits bigint not null default 0 check (visits >= 0)
+);
+
+insert into public.site_stats (id, visits)
+values (1, 0)
+on conflict (id) do nothing;
+
+-- =====================================================
 -- ROW LEVEL SECURITY
 -- =====================================================
 
@@ -181,6 +219,8 @@ alter table public.projects enable row level security;
 alter table public.project_submissions enable row level security;
 alter table public.badges enable row level security;
 alter table public.user_badges enable row level security;
+alter table public.reviews enable row level security;
+alter table public.site_stats enable row level security;
 
 -- Profiles
 
@@ -288,3 +328,82 @@ create policy "Users can insert own badges"
 on public.user_badges
 for insert
 with check (auth.uid() = user_id);
+
+-- Reviews
+
+create policy "Public can read reviews"
+on public.reviews
+for select
+using (true);
+
+create policy "Users can insert own review"
+on public.reviews
+for insert
+to authenticated
+with check (user_id = auth.uid());
+
+create policy "Users can update own review"
+on public.reviews
+for update
+to authenticated
+using (user_id = auth.uid());
+
+create policy "Users can delete own review"
+on public.reviews
+for delete
+to authenticated
+using (user_id = auth.uid());
+
+-- Site stats
+-- LiveStats incremente visits directement depuis le navigateur. La policy
+-- restreint l'update a la ligne 1, et les GRANT limitent l'ecriture a la
+-- seule colonne visits.
+
+create policy "Public can read site stats"
+on public.site_stats
+for select
+using (true);
+
+create policy "Public can bump visits"
+on public.site_stats
+for update
+using (id = 1)
+with check (id = 1);
+
+revoke update on public.site_stats from anon, authenticated;
+grant update (visits) on public.site_stats to anon, authenticated;
+
+-- =====================================================
+-- STATISTIQUES AGREGEES
+-- =====================================================
+-- Appelee via supabase.rpc('get_site_stats').single().
+-- security definer : members et lessons_done agregent public.profiles, que
+-- la RLS empeche de lire ligne par ligne cote client.
+-- Colonnes de sortie positionnelles (pas d'alias) pour eviter toute
+-- ambiguite avec les noms de tables/colonnes du corps.
+
+create or replace function public.get_site_stats()
+returns table (
+  visits bigint,
+  members bigint,
+  lessons_done bigint,
+  reviews bigint
+)
+language sql
+security definer
+set search_path = public, pg_temp
+stable
+as $$
+  select
+    coalesce((select s.visits from public.site_stats s where s.id = 1), 0)::bigint,
+    (select count(*) from public.profiles)::bigint,
+    coalesce(
+      (select sum(coalesce(cardinality(p.completed_missions), 0))
+         from public.profiles p),
+      0
+    )::bigint,
+    (select count(*) from public.reviews)::bigint;
+$$;
+
+revoke all on function public.get_site_stats() from public;
+grant execute on function public.get_site_stats() to anon, authenticated;

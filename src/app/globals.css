@@ -1,7 +1,21 @@
 @import "tailwindcss";
 
+/* Le mode sombre est pilote par la classe .dark posee sur <html> par
+   ThemeProvider. Sans cette ligne, Tailwind v4 compile toutes les utilitaires
+   `dark:` dans @media (prefers-color-scheme: dark) : elles suivent alors la
+   preference systeme et le bouton de bascule ne commande rien.
+   :where() garde la specificite a zero, pour ne pas perturber le cascade. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* color-scheme doit suivre la classe, pas la preference systeme : sinon les
+   controles natifs (champs, scrollbars, select) s'affichent en sombre alors
+   que la page est en clair. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+}
+
+:root.dark {
+  color-scheme: dark;
 }
 
 html,
@@ -81,7 +95,11 @@ nextjs-portal {
 }
 
 /* Utilitaires de couleur pour le mode clair - classes spécifiques aux pages non adaptées */
-.glass .text-white:not([class*="dark:"]) {
+/* Exclusion des degrades : `text-white` y est voulu dans les deux themes.
+   Sans ce :not, le libelle des 14 boutons a degrade passait en bleu nuit sur
+   un fond sature en mode clair (la regle a une specificite de 0,3,0 contre
+   0,1,0 pour l'utilitaire text-white, donc elle gagnait). */
+.glass .text-white:not([class*="dark:"]):not([class*="bg-gradient"]) {
   @apply text-slate-900 dark:text-white;
 }
 

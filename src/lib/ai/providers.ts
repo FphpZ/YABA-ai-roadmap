@@ -1,6 +1,7 @@
 type AiResult = {
   text: string;
   provider: string;
+  providerId: ProviderId;
   model: string;
 };
 
@@ -9,14 +10,39 @@ const SYSTEM_PROMPT =
 
 export type ProviderId = 'groq' | 'mistral' | 'gemini';
 
+const PROVIDER_ORDER: ProviderId[] = ['groq', 'mistral', 'gemini'];
+
+// Statuts pour lesquels il vaut la peine d'essayer le modele suivant :
+// 404 = modele decommissionne, 429 = quota, 5xx = indisponibilite passagere.
+// Un 401/403 vient de la cle : inutile d'insister sur les autres modeles.
+const RETRYABLE_STATUS = new Set([404, 429, 500, 502, 503, 504]);
+
+class ProviderHttpError extends Error {
+  status: number;
+
+  constructor(status: number, body: string) {
+    super(`HTTP ${status} - ${body.slice(0, 300)}`);
+    this.name = 'ProviderHttpError';
+    this.status = status;
+  }
+}
+
+// Permet de changer de modele sans redeploiement (GROQ_MODEL, MISTRAL_MODEL,
+// GEMINI_MODEL) : c'est ce qui evite que des identifiants codes en dur
+// deviennent obsoletes sans qu'on s'en apercoive.
+function resolveModels(override: string | undefined, defaults: string[]): string[] {
+  const preferred = override?.trim();
+  if (!preferred) return defaults;
+  return [preferred, ...defaults.filter((model) => model !== preferred)];
+}
+
 // Format compatible OpenAI (Groq, Mistral)
-async function openAiCompatible(
+async function callOpenAiCompatible(
   url: string,
   key: string,
   model: string,
-  prompt: string,
-  provider: string
-): Promise<AiResult> {
+  prompt: string
+): Promise<string> {
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -34,68 +60,118 @@ async function openAiCompatible(
   });
 
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`${provider} : erreur ${response.status} - ${errorText}`);
+    throw new ProviderHttpError(response.status, await response.text());
   }
 
   const data = await response.json();
-  const text = data.choices?.[0]?.message?.content ?? 'Pas de reponse.';
-
-  return { text, provider, model };
+  return data.choices?.[0]?.message?.content ?? 'Pas de reponse.';
 }
 
-// Format Gemini avec plusieurs modeles en fallback
-async function gemini(key: string, prompt: string): Promise<AiResult> {
-  // Liste des modeles Gemini a essayer dans l'ordre
-  const models = [
-    'gemini-2.0-flash-exp',
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-flash-8b',
-  ];
+// Format Gemini
+async function callGemini(
+  key: string,
+  model: string,
+  prompt: string
+): Promise<string> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
 
-  for (const model of models) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [{ parts: [{ text: prompt }] }],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new ProviderHttpError(response.status, await response.text());
+  }
+
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? 'Pas de reponse.';
+}
+
+type ProviderConfig = {
+  name: string;
+  envKey: string;
+  models: () => string[];
+  call: (key: string, model: string, prompt: string) => Promise<string>;
+};
+
+const PROVIDERS: Record<ProviderId, ProviderConfig> = {
+  groq: {
+    name: 'Groq',
+    envKey: 'GROQ_API_KEY',
+    models: () =>
+      resolveModels(process.env.GROQ_MODEL, [
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b',
+      ]),
+    call: (key, model, prompt) =>
+      callOpenAiCompatible(
+        'https://api.groq.com/openai/v1/chat/completions',
+        key,
+        model,
+        prompt
+      ),
+  },
+
+  mistral: {
+    name: 'Mistral',
+    envKey: 'MISTRAL_API_KEY',
+    models: () =>
+      resolveModels(process.env.MISTRAL_MODEL, [
+        'mistral-small-latest',
+        'mistral-medium-latest',
+      ]),
+    call: (key, model, prompt) =>
+      callOpenAiCompatible(
+        'https://api.mistral.ai/v1/chat/completions',
+        key,
+        model,
+        prompt
+      ),
+  },
+
+  gemini: {
+    name: 'Gemini',
+    envKey: 'GEMINI_API_KEY',
+    models: () =>
+      resolveModels(process.env.GEMINI_MODEL, [
+        'gemini-3.6-flash',
+        'gemini-3.5-flash',
+        'gemini-flash-lite-latest',
+        'gemini-3.1-flash-lite',
+      ]),
+    call: callGemini,
+  },
+};
+
+// Essaie chaque modele du provider jusqu'a en trouver un qui repond.
+async function callProvider(
+  providerId: ProviderId,
+  key: string,
+  prompt: string
+): Promise<AiResult> {
+  const config = PROVIDERS[providerId];
+  const failures: string[] = [];
+
+  for (const model of config.models()) {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
-      });
-
-      if (response.ok) {
-        const data = await response.json();
-        const text =
-          data.candidates?.[0]?.content?.parts?.[0]?.text ?? 'Pas de reponse.';
-
-        return { text, provider: 'Gemini', model };
-      }
-
-      // Si erreur 429 (quota) ou 404 (modele introuvable), on essaie le suivant
-      const status = response.status;
-      if (status === 429 || status === 404) {
-        console.log(`Modele ${model} indisponible, essai du suivant...`);
-        continue;
-      }
-
-      // Autre erreur, on la remonte
-      const errorText = await response.text();
-      throw new Error(`Gemini : erreur ${status} - ${errorText}`);
+      const text = await config.call(key, model, prompt);
+      return { text, provider: config.name, providerId, model };
     } catch (error) {
-      // Si c'est le dernier modele, on remonte l'erreur
-      if (model === models[models.length - 1]) {
-        throw error;
-      }
-      // Sinon on continue avec le modele suivant
-      console.log(`Erreur avec ${model}, essai du suivant...`);
+      const message = error instanceof Error ? error.message : 'erreur inconnue';
+      failures.push(`${model} -> ${message}`);
+
+      const retryable =
+        error instanceof ProviderHttpError && RETRYABLE_STATUS.has(error.status);
+      if (!retryable) break;
     }
   }
 
-  throw new Error('Aucun modele Gemini disponible');
+  throw new Error(`${config.name} : ${failures.join(' | ')}`);
 }
 
 // Fonction principale avec fallback automatique entre providers
@@ -103,71 +179,52 @@ export async function generateAiResponse(
   prompt: string,
   preferredProvider?: ProviderId
 ): Promise<AiResult> {
-  const groqKey = process.env.GROQ_API_KEY;
-  const mistralKey = process.env.MISTRAL_API_KEY;
-  const geminiKey = process.env.GEMINI_API_KEY;
-
-  // Ordre des providers a essayer
-  const providerOrder: ProviderId[] = preferredProvider
-    ? ([preferredProvider, 'groq', 'mistral', 'gemini'] as ProviderId[]).filter(
-      (p, i, arr) => arr.indexOf(p) === i
-    )
-    : ['groq', 'mistral', 'gemini'];
+  const order: ProviderId[] = preferredProvider
+    ? [
+        preferredProvider,
+        ...PROVIDER_ORDER.filter((id) => id !== preferredProvider),
+      ]
+    : [...PROVIDER_ORDER];
 
   const errors: string[] = [];
 
-  for (const providerId of providerOrder) {
+  for (const providerId of order) {
+    const config = PROVIDERS[providerId];
+    const key = process.env[config.envKey];
+
+    if (!key) {
+      errors.push(`${config.name} : ${config.envKey} non configuree`);
+      continue;
+    }
+
     try {
-      if (providerId === 'groq' && groqKey) {
-        return await openAiCompatible(
-          'https://api.groq.com/openai/v1/chat/completions',
-          groqKey,
-          'llama-3.3-70b-versatile',
-          prompt,
-          'Groq'
-        );
-      }
-
-      if (providerId === 'mistral' && mistralKey) {
-        return await openAiCompatible(
-          'https://api.mistral.ai/v1/chat/completions',
-          mistralKey,
-          'mistral-small-latest',
-          prompt,
-          'Mistral'
-        );
-      }
-
-      if (providerId === 'gemini' && geminiKey) {
-        return await gemini(geminiKey, prompt);
-      }
+      return await callProvider(providerId, key, prompt);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Erreur inconnue';
-      errors.push(`${providerId}: ${message}`);
-      console.error(`Erreur ${providerId}:`, message);
-      // On continue avec le provider suivant
+      const message = error instanceof Error ? error.message : 'Erreur inconnue';
+      errors.push(message);
+      console.error(`[ai] ${providerId} indisponible : ${message}`);
     }
   }
 
-  throw new Error(
-    `Tous les providers ont echoue:\n${errors.join('\n')}`
-  );
+  throw new Error(`Tous les providers ont echoue :\n${errors.join('\n')}`);
 }
 
-// Retourne la liste des providers disponibles
-export function getAvailableProviders(): { id: ProviderId; name: string; key: string }[] {
-  const providers: { id: ProviderId; name: string; key: string }[] = [];
-
-  if (process.env.GROQ_API_KEY) {
-    providers.push({ id: 'groq', name: 'Groq (Llama 3.3 70B)', key: 'GROQ_API_KEY' });
-  }
-  if (process.env.MISTRAL_API_KEY) {
-    providers.push({ id: 'mistral', name: 'Mistral (Small)', key: 'MISTRAL_API_KEY' });
-  }
-  if (process.env.GEMINI_API_KEY) {
-    providers.push({ id: 'gemini', name: 'Gemini (Multi-modeles)', key: 'GEMINI_API_KEY' });
-  }
-
-  return providers;
+// Retourne la liste des providers disponibles.
+// Le nom affiche inclut le modele reellement utilise, pour qu'il ne puisse
+// plus se desynchroniser du code comme l'ancien libelle "Llama 3.3 70B".
+export function getAvailableProviders(): {
+  id: ProviderId;
+  name: string;
+  key: string;
+}[] {
+  return PROVIDER_ORDER.filter((id) => process.env[PROVIDERS[id].envKey]).map(
+    (id) => {
+      const config = PROVIDERS[id];
+      return {
+        id,
+        name: `${config.name} (${config.models()[0]})`,
+        key: config.envKey,
+      };
+    }
+  );
 }

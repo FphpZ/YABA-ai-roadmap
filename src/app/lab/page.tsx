@@ -9,7 +9,6 @@ import {
   validatePrompt,
   validateCity,
   validateDetail,
-  containsDangerousCode,
 } from '@/lib/security';
 import type { PromptScoreResult } from '@/types';
 import type { ProviderId } from '@/lib/ai/providers';
@@ -139,6 +138,7 @@ export default function LabPage() {
 
   const [aiText, setAiText] = useState('');
   const [aiProvider, setAiProvider] = useState('');
+  const [aiProviderId, setAiProviderId] = useState<ProviderId | ''>('');
   const [aiModel, setAiModel] = useState('');
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
@@ -250,17 +250,13 @@ export default function LabPage() {
       if (!response.ok) {
         setAiError(data.error || (locale === 'fr' ? 'Erreur IA' : 'AI Error'));
       } else {
-        if (containsDangerousCode(data.text)) {
-          setAiError(
-            locale === 'fr'
-              ? 'La réponse IA contient du code potentiellement dangereux et a été bloquée.'
-              : 'The AI response contains potentially dangerous code and has been blocked.'
-          );
-        } else {
-          setAiText(data.text);
-          setAiProvider(data.provider);
-          setAiModel(data.model);
-        }
+        // La reponse est affichee dans <pre>{aiText}</pre> : React l'echappe,
+        // aucun filtrage de sortie n'est necessaire (et filtrer bloquait
+        // toute reponse contenant du code).
+        setAiText(data.text);
+        setAiProvider(data.provider);
+        setAiProviderId(data.providerId ?? '');
+        setAiModel(data.model);
       }
     } catch {
       setAiError(locale === 'fr' ? 'Erreur réseau. Réessaie.' : 'Network error. Try again.');
@@ -272,7 +268,7 @@ export default function LabPage() {
   return (
     <section className="mx-auto min-h-screen max-w-7xl px-4 py-16">
       <GlassCard className="mb-8 p-8">
-        <p className="text-xs font-bold uppercase tracking-[0.35em] text-sky-300 dark:text-sky-300" style={{ color: '#0ea5e9' }}>
+        <p className="text-xs font-bold uppercase tracking-[0.35em] text-sky-600 dark:text-sky-300">
           {t.lab.badge}
         </p>
 
@@ -503,7 +499,7 @@ export default function LabPage() {
                 <pre className="mt-4 max-h-96 overflow-y-auto whitespace-pre-wrap rounded-2xl border border-slate-300 bg-slate-100 p-4 text-sm text-slate-800 dark:border-white/10 dark:bg-black/30 dark:text-slate-300">
                   {aiText}
                 </pre>
-                {aiProvider !== selectedProvider && (
+                {aiProviderId && aiProviderId !== selectedProvider && (
                   <p className="mt-2 text-xs text-slate-600 dark:text-slate-500">
                     {t.lab.providerUnavailable
                       .replace('{provider}', selectedProvider)

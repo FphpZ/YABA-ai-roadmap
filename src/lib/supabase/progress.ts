@@ -61,6 +61,7 @@ export async function saveProgress(progress: SavedProgress): Promise<void> {
       goal: progress.goal,
       completed_missions: progress.completedMissions,
       unlocked_worlds: progress.unlockedWorlds,
+      streak: progress.streak,
     })
     .eq('id', session.user.id);
 }

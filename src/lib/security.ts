@@ -118,16 +118,3 @@ export function validateDetail(detail: string): {
 
   return { valid: true, sanitized: sanitizeHTML(trimmed) };
 }
-
-export function containsDangerousCode(text: string): boolean {
-  const dangerousPatterns = [
-    /<script/i,
-    /javascript:/i,
-    /on\w+\s*=/i,
-    /eval\s*\(/i,
-    /document\.(cookie|write|location)/i,
-    /window\.location/i,
-  ];
-
-  return dangerousPatterns.some((pattern) => pattern.test(text));
-}

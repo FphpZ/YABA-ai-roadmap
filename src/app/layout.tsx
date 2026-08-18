@@ -15,7 +15,20 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="fr">
+    <html lang="fr" suppressHydrationWarning>
+      <head>
+        {/* Pose la classe .dark avant le premier rendu. ThemeProvider ne la
+            pose que dans son useEffect, donc apres l'hydratation : sans ce
+            script, un utilisateur en mode sombre voit un flash blanc a chaque
+            chargement de page. Chaine statique, aucune donnee utilisateur
+            interpolee. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(localStorage.getItem('ai-roadmap-theme')==='dark'){document.documentElement.classList.add('dark')}}catch(e){}",
+          }}
+        />
+      </head>
       <body
         className="min-h-screen bg-white text-slate-900 antialiased dark:bg-[#020204] dark:text-slate-100"
         suppressHydrationWarning

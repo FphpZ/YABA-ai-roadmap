@@ -18,7 +18,7 @@ export default function CartePage() {
   return (
     <section className="mx-auto min-h-screen max-w-7xl px-4 py-16">
       <GlassCard className="mb-10 p-8">
-        <p className="text-xs font-bold uppercase tracking-[0.35em] text-sky-300 dark:text-sky-300" style={{ color: '#0ea5e9' }}>
+        <p className="text-xs font-bold uppercase tracking-[0.35em] text-sky-600 dark:text-sky-300">
           {t.carte.badge}
         </p>
 

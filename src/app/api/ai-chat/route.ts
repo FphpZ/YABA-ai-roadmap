@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { generateAiResponse, getAvailableProviders, type ProviderId } from '@/lib/ai/providers';
-import { sanitizeHTML, LIMITS, containsDangerousCode } from '@/lib/security';
+import { sanitizeHTML, LIMITS } from '@/lib/security';
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
@@ -34,19 +34,21 @@ export async function POST(request: Request) {
   try {
     const result = await generateAiResponse(sanitized, providerId);
 
-    // Vérifier que la réponse IA ne contient pas de code dangereux
-    if (containsDangerousCode(result.text)) {
-      return NextResponse.json(
-        { error: 'La réponse IA contient du code potentiellement dangereux.' },
-        { status: 400 }
-      );
-    }
-
+    // Pas de filtrage de la reponse : elle est affichee comme texte React
+    // (<pre>{aiText}</pre>), donc echappee par React. Filtrer la sortie
+    // rejetait toute reponse contenant du code (onClick=, eval(), etc.),
+    // c'est-a-dire le cas d'usage central de la plateforme.
     return NextResponse.json(result);
   } catch (error: unknown) {
-    const message =
-      error instanceof Error ? error.message : 'Erreur inconnue';
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Le detail contient les erreurs de chaque provider : utile dans les logs
+    // serveur, mais on ne le renvoie pas au client.
+    const detail = error instanceof Error ? error.message : 'Erreur inconnue';
+    console.error('[api/ai-chat] echec de generation :', detail);
+
+    return NextResponse.json(
+      { error: 'Aucun provider IA disponible pour le moment. Reessaie plus tard.' },
+      { status: 503 }
+    );
   }
 }
 

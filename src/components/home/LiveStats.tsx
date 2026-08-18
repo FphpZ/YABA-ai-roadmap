@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client-browser';
 import { useLocale } from '@/components/providers/LocaleProvider';
-import { useTheme } from '@/components/providers/ThemeProvider';
 
 type Review = {
   id: string;
@@ -44,21 +43,14 @@ function StatCard({
   value: number;
 }) {
   const animated = useCountUp(value);
-  const { theme } = useTheme();
 
   return (
     <div className="glass rounded-3xl p-6 text-center">
       <div className="text-3xl">{emoji}</div>
-      <p 
-        className="mt-2 text-3xl font-black dark:text-white" 
-        style={theme === 'light' ? { color: '#0f172a' } : undefined}
-      >
+      <p className="mt-2 text-3xl font-black text-slate-900 dark:text-white">
         {animated}
       </p>
-      <p 
-        className="mt-1 text-xs font-black uppercase tracking-widest dark:text-slate-400"
-        style={theme === 'light' ? { color: '#1e293b' } : undefined}
-      >
+      <p className="mt-1 text-xs font-black uppercase tracking-widest text-slate-800 dark:text-slate-400">
         {label}
       </p>
     </div>
